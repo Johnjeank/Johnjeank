@@ -1,0 +1,18 @@
+# Credentials – never commit
+.env
+
+# Runtime state
+seen_ids.json
+playwright_error.png
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Playwright
+playwright/.local-browsers/
