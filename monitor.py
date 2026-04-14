@@ -26,6 +26,7 @@ from telegram.error import TelegramError
 
 from config import settings
 from vinted_client import VintedClient
+from filters import has_excluded_keyword, model_price_cap
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +55,29 @@ def _str(value: Any) -> str:
 
 
 def matches_filters(item: Any) -> bool:
-    """Return True if *item* passes all configured local filters."""
-    # ── Max price ─────────────────────────────────────────────────────────────
+    """Return True if *item* passes all configured + advanced filters."""
+    title = getattr(item, "title", "") or ""
+    description = getattr(item, "description", "") or ""
+    search_text = f"{title} {description}"
+
+    # ── 1. Keyword exclusions (cracked, broken, iCloud lock, scam payments) ──
+    if has_excluded_keyword(search_text):
+        logger.debug("Rejected '%s' – excluded keyword matched.", title)
+        return False
+
+    # ── 2. Per-model price cap ────────────────────────────────────────────────
+    try:
+        price = float(item.price)
+        cap = model_price_cap(title)
+        if cap is not None and price > cap:
+            logger.debug(
+                "Rejected '%s' – €%.0f exceeds model cap €%.0f.", title, price, cap
+            )
+            return False
+    except (TypeError, ValueError):
+        pass
+
+    # ── 3. Global max price (fallback when model not recognised) ─────────────
     if settings.max_price is not None:
         try:
             if float(item.price) > settings.max_price:
@@ -63,25 +85,25 @@ def matches_filters(item: Any) -> bool:
         except (TypeError, ValueError):
             pass
 
-    # ── Brand ─────────────────────────────────────────────────────────────────
+    # ── 4. Brand ──────────────────────────────────────────────────────────────
     if settings.brands:
         brand = _str(getattr(item, "brand_title", None))
         if not any(_str(b) in brand for b in settings.brands):
             return False
 
-    # ── Size ──────────────────────────────────────────────────────────────────
+    # ── 5. Size ───────────────────────────────────────────────────────────────
     if settings.sizes:
         size = _str(getattr(item, "size_title", None))
         if not any(_str(s) in size for s in settings.sizes):
             return False
 
-    # ── Condition / status ────────────────────────────────────────────────────
+    # ── 6. Condition / status ─────────────────────────────────────────────────
     if settings.conditions:
         status = _str(getattr(item, "status", None))
         if not any(_str(c) in status for c in settings.conditions):
             return False
 
-    # ── Minimum seller rating ─────────────────────────────────────────────────
+    # ── 7. Minimum seller rating ──────────────────────────────────────────────
     if settings.min_seller_rating is not None:
         try:
             user = getattr(item, "user", None)
@@ -108,9 +130,18 @@ def _item_caption(item: Any) -> str:
     url = getattr(item, "url", "")
     title = getattr(item, "title", "No title")
 
+    # Show budget headroom vs model cap (e.g. "35 / cap 50 = 15 under")
+    cap = model_price_cap(title)
+    try:
+        headroom = cap - float(price)
+        cap_line = f"📊 Cap: €{cap:.0f}  •  {_escape(f'€{headroom:.0f} under')}\n"
+    except (TypeError, ValueError):
+        cap_line = ""
+
     return (
         f"*{_escape(title)}*\n"
         f"💰 {_escape(str(price))} {_escape(currency)}\n"
+        f"{cap_line}"
         f"🏷 Brand: {_escape(brand)}\n"
         f"📐 Size: {_escape(size)}\n"
         f"✨ Condition: {_escape(status)}\n"
